@@ -1,0 +1,166 @@
+#Load required libraries
+library(nimble)
+library(coda)
+library(mcmcse)
+library(ggmcmc)
+
+#Clear workspace and set parameters
+rm(list = ls())
+niter <- 20000
+nburnin <- 1000
+
+#Set working directory (update this path for your local setup before uploading)
+setwd("C:/Users/aoibh/OneDrive - University College Cork/Final Year Project/Schools/AA Final Model")
+
+#Load and prepare Eight Schools data
+data("Rubin1981", package = "bayesmeta")
+schools_data <- Rubin1981
+J <- nrow(schools_data)
+y_j <- schools_data$effect
+sigma_j <- schools_data$stderr
+
+#Model 1a: Vague Prior with Centered Parameterisation ----------------------------------------
+set.seed(123)
+code_1a <- nimbleCode({
+  for (i in 1:J) {
+    theta[i] ~ dnorm(mu, sd = tau)
+    effect[i] ~ dnorm(theta[i], sd = sderr[i])
+    y_pred[i] ~ dnorm(theta[i], sd = sderr[i])
+  }
+  mu ~ dnorm(0, sd = 1000)  #Vague prior
+  tau ~ dlnorm(5, 1)
+  logLik <- sum(dnorm(effect[1:J], theta[1:J], sd = sderr[1:J], log = TRUE))
+})
+schools_mod_1a <- nimbleModel(code_1a, constants = constants, data = data, inits = inits)
+Cschools_1a <- compileNimble(schools_mod_1a)
+mcmcConf_1a <- configureMCMC(schools_mod_1a, monitors = c("mu", "tau", "theta", "y_pred", "logLik"))
+mcmcBuild_1a <- buildMCMC(mcmcConf_1a)
+Cmcmc_1a <- compileNimble(mcmcBuild_1a, project = schools_mod_1a)
+samples_1a <- runMCMC(Cmcmc_1a, niter = niter, nburnin = nburnin, nchains = 1)
+
+#Model 1b: Vague Prior with Non-Centered Parameterisation ------------------------------------
+set.seed(123)
+code_1b <- nimbleCode({
+  for (i in 1:J) {
+    eta[i] ~ dnorm(0, 1)
+    theta[i] <- mu + tau * eta[i]
+    effect[i] ~ dnorm(theta[i], sd = sderr[i])
+    y_pred[i] ~ dnorm(theta[i], sd = sderr[i])
+  }
+  mu ~ dnorm(0, sd = 1000)  #Vague prior
+  tau ~ dlnorm(5, 1)
+  logLik <- sum(dnorm(effect[1:J], theta[1:J], sd = sderr[1:J], log = TRUE))
+})
+schools_mod_1b <- nimbleModel(code_1b, constants = constants, data = data, inits = inits)
+Cschools_1b <- compileNimble(schools_mod_1b)
+mcmcConf_1b <- configureMCMC(schools_mod_1b, monitors = c("mu", "tau", "theta", "y_pred", "logLik"))
+mcmcBuild_1b <- buildMCMC(mcmcConf_1b)
+Cmcmc_1b <- compileNimble(mcmcBuild_1b, project = schools_mod_1b)
+samples_1b <- runMCMC(Cmcmc_1b, niter = niter, nburnin = nburnin, nchains = 1)
+
+#Model 2: Tight Prior with Non-Centered Parameterisation --------------------------------------------
+set.seed(123)
+code_2 <- nimbleCode({
+  for (i in 1:J) {
+    eta[i] ~ dnorm(0, 1)           #Latent variable
+    theta[i] <- mu + tau * eta[i]  #Non-centered parameterisation
+    effect[i] ~ dnorm(theta[i], sd = sderr[i])
+    y_pred[i] ~ dnorm(theta[i], sd = sderr[i])
+  }
+  mu ~ dnorm(0, sd = 1)  #Tight prior
+  tau ~ dlnorm(5, 1)     #Lognormal prior
+  logLik <- sum(dnorm(effect[1:J], theta[1:J], sd = sderr[1:J], log = TRUE))
+})
+constants <- list(J = J)
+data <- list(effect = y_j, sderr = sigma_j)
+inits <- list(eta = rep(0, J), mu = 0, tau = 1, y_pred = rep(0, J))
+schools_mod_2 <- nimbleModel(code_2, constants = constants, data = data, inits = inits)
+Cschools_2 <- compileNimble(schools_mod_2)
+mcmcConf_2 <- configureMCMC(schools_mod_2, monitors = c("mu", "tau", "theta", "y_pred", "logLik"))
+mcmcBuild_2 <- buildMCMC(mcmcConf_2)
+Cmcmc_2 <- compileNimble(mcmcBuild_2, project = schools_mod_2)
+samples_2 <- runMCMC(Cmcmc_2, niter = niter, nburnin = nburnin, nchains = 1)
+
+#Save MCMC output
+save(samples_2, samples_1a, samples_1b, file = "MCMC_Output.RData")
+
+#Convert to MCMC objects for analysis
+mcmc_chain_2 <- as.mcmc(samples_2)
+mcmc_chain_1a <- as.mcmc(samples_1a)
+mcmc_chain_1b <- as.mcmc(samples_1b)
+
+#Effective Sample Size (ESS) and MultiESS
+ES_2 <- effectiveSize(mcmc_chain_2)[c("mu", "tau")]
+ES_1a <- effectiveSize(mcmc_chain_1a)[c("mu", "tau")]
+ES_1b <- effectiveSize(mcmc_chain_1b)[c("mu", "tau")]
+MES_2 <- multiESS(mcmc_chain_2[, grep("^theta\\[", colnames(mcmc_chain_2))])
+MES_1a <- multiESS(mcmc_chain_1a[, grep("^theta\\[", colnames(mcmc_chain_1a))])
+MES_1b <- multiESS(mcmc_chain_1b[, grep("^theta\\[", colnames(mcmc_chain_1b))])
+
+results <- data.frame(
+  Parameter = c("ESS mu", "ESS tau", "Multi ESS theta"),
+  Model_2 = c(ES_2[1], ES_2[2], MES_2),
+  Model_1a = c(ES_1a[1], ES_1a[2], MES_1a),
+  Model_1b = c(ES_1b[1], ES_1b[2], MES_1b)
+)
+write.csv(results, "mcmc_effective_size.csv", row.names = FALSE)
+
+#Posterior Predictive Boxplots
+pred_2 <- as.matrix(as.data.frame(samples_2)[, grep("y_pred", colnames(samples_2))])
+pred_1a <- as.matrix(as.data.frame(samples_1a)[, grep("y_pred", colnames(samples_1a))])
+pred_1b <- as.matrix(as.data.frame(samples_1b)[, grep("y_pred", colnames(samples_1b))])
+
+pdf("posterior_predictive_boxplots_2.pdf", width = 8, height = 6)
+boxplot(pred_2, names = 1:8, main = "Model 2: Posterior Predictive Distributions",
+        xlab = "School", ylab = "Effect")
+points(1:8, y_j, col = "red", pch = 16)
+means_pred <- colMeans(pred_2)
+points(1:8, means_pred, col = "green", pch = 16)
+arrows(1:8, y_j - 1.96 * sigma_j, 1:8, y_j + 1.96 * sigma_j, angle = 90, code = 3, col = "red", length = 0.1)
+dev.off()
+
+pdf("posterior_predictive_boxplots_1a.pdf", width = 8, height = 6)
+boxplot(pred_1a, names = 1:8, main = "Model 1a: Posterior Predictive Distributions",
+        xlab = "School", ylab = "Effect")
+points(1:8, y_j, col = "red", pch = 16)
+means_pred <- colMeans(pred_1a)
+points(1:8, means_pred, col = "green", pch = 16)
+arrows(1:8, y_j - 1.96 * sigma_j, 1:8, y_j + 1.96 * sigma_j, angle = 90, code = 3, col = "red", length = 0.1)
+dev.off()
+
+pdf("posterior_predictive_boxplots_1b.pdf", width = 8, height = 6)
+boxplot(pred_1b, names = 1:8, main = "Model 1b: Posterior Predictive Distributions",
+        xlab = "School", ylab = "Effect")
+points(1:8, y_j, col = "red", pch = 16)
+means_pred <- colMeans(pred_1b)
+points(1:8, means_pred, col = "green", pch = 16)
+arrows(1:8, y_j - 1.96 * sigma_j, 1:8, y_j + 1.96 * sigma_j, angle = 90, code = 3, col = "red", length = 0.1)
+dev.off()
+
+#Shrinkage Plots
+mcmc_means_2 <- colMeans(mcmc_chain_2[, grep("^theta\\[", colnames(mcmc_chain_2))])
+pdf("shrinkage_plot_2.pdf", width = 8, height = 6)
+plot(rep(1, J), y_j, xlim = c(0.5, 2.5), ylim = range(c(y_j, mcmc_means_2)),
+     pch = 16, col = "red", xaxt = "n", xlab = "", ylab = "Effect", main = "Model 2: Shrinkage")
+points(rep(2, J), mcmc_means_2, pch = 16, col = "blue")
+axis(1, at = c(1, 2), labels = c("Observed", "MCMC Mean"))
+segments(1:J, y_j, 1:J, mcmc_means_2, col = "gray", lty = 2)
+dev.off()
+
+mcmc_means_1a <- colMeans(mcmc_chain_1a[, grep("^theta\\[", colnames(mcmc_chain_1a))])
+pdf("shrinkage_plot_1a.pdf", width = 8, height = 6)
+plot(rep(1, J), y_j, xlim = c(0.5, 2.5), ylim = range(c(y_j, mcmc_means_1a)),
+     pch = 16, col = "red", xaxt = "n", xlab = "", ylab = "Effect", main = "Model 1a: Shrinkage")
+points(rep(2, J), mcmc_means_1a, pch = 16, col = "blue")
+axis(1, at = c(1, 2), labels = c("Observed", "MCMC Mean"))
+segments(1:J, y_j, 1:J, mcmc_means_1a, col = "gray", lty = 2)
+dev.off()
+
+mcmc_means_1b <- colMeans(mcmc_chain_1b[, grep("^theta\\[", colnames(mcmc_chain_1b))])
+pdf("shrinkage_plot_1b.pdf", width = 8, height = 6)
+plot(rep(1, J), y_j, xlim = c(0.5, 2.5), ylim = range(c(y_j, mcmc_means_1b)),
+     pch = 16, col = "red", xaxt = "n", xlab = "", ylab = "Effect", main = "Model 1b: Shrinkage")
+points(rep(2, J), mcmc_means_1b, pch = 16, col = "blue")
+axis(1, at = c(1, 2), labels = c("Observed", "MCMC Mean"))
+segments(1:J, y_j, 1:J, mcmc_means_1b, col = "gray", lty = 2)
+dev.off()
