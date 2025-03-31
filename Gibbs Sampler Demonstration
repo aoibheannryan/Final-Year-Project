@@ -1,0 +1,115 @@
+#Clear workspace
+rm(list = ls())
+
+#Parameters
+y1 <- 0
+y2 <- 0
+rho <- 0.8
+var <- 1 - rho^2  #Known variance
+num_samples <- 80
+seq_start <- cbind(c(-2.5, -2.5), c(-2.5, 2.5), c(2.5, -2.5), c(2.5, 2.5))
+num_sequences <- ncol(seq_start)
+
+#Initialise Gibbs sample matrices
+theta1_samples <- matrix(0, nrow = num_samples, ncol = num_sequences)
+theta2_samples <- matrix(0, nrow = num_samples, ncol = num_sequences)
+theta1_samples[1, ] <- seq_start[1, ]
+theta2_samples[1, ] <- seq_start[2, ]
+
+#Gibbs Sampling
+set.seed(123)
+for (j in 1:num_sequences) {
+  for (t in 2:num_samples) {
+    # theta1 | theta2
+    theta1_mean <- y1 + rho * (theta2_samples[t-1, j] - y2)
+    theta1_samples[t, j] <- rnorm(1, mean = theta1_mean, sd = sqrt(var))
+    # theta2 | theta1
+    theta2_mean <- y2 + rho * (theta1_samples[t, j] - y1)
+    theta2_samples[t, j] <- rnorm(1, mean = theta2_mean, sd = sqrt(var))
+  }
+}
+
+#Initialise MH-within-Gibbs sample matrices
+theta1_uniform_samples <- matrix(0, nrow = num_samples, ncol = num_sequences)
+theta2_uniform_samples <- matrix(0, nrow = num_samples, ncol = num_sequences)
+theta1_uniform_samples[1, ] <- seq_start[1, ]
+theta2_uniform_samples[1, ] <- seq_start[2, ]
+proposal_width <- 1  #Uniform proposal width
+
+#MH-within-Gibbs Sampling
+set.seed(123)
+for (j in 1:num_sequences) {
+  for (t in 2:num_samples) {
+    #theta1 | theta2 with uniform proposal
+    theta1_current <- theta1_uniform_samples[t-1, j]
+    theta2_value <- theta2_uniform_samples[t-1, j]
+    theta1_mean <- y1 + rho * (theta2_value - y2)
+    theta1_proposal <- runif(1, theta1_current - proposal_width, theta1_current + proposal_width)
+    log_acceptance_ratio1 <- dnorm(theta1_proposal, mean = theta1_mean, sd = sqrt(var), log = TRUE) -
+                             dnorm(theta1_current, mean = theta1_mean, sd = sqrt(var), log = TRUE)
+    if (log(runif(1)) < log_acceptance_ratio1) {
+      theta1_uniform_samples[t, j] <- theta1_proposal
+    } else {
+      theta1_uniform_samples[t, j] <- theta1_current
+    }
+    #theta2 | theta1 with uniform proposal
+    theta2_current <- theta2_uniform_samples[t-1, j]
+    theta2_mean <- y2 + rho * (theta1_uniform_samples[t, j] - y1)
+    theta2_proposal <- runif(1, theta2_current - proposal_width, theta2_current + proposal_width)
+    log_acceptance_ratio2 <- dnorm(theta2_proposal, mean = theta2_mean, sd = sqrt(var), log = TRUE) -
+                             dnorm(theta2_current, mean = theta2_mean, sd = sqrt(var), log = TRUE)
+    if (log(runif(1)) < log_acceptance_ratio2) {
+      theta2_uniform_samples[t, j] <- theta2_proposal
+    } else {
+      theta2_uniform_samples[t, j] <- theta2_current
+    }
+  }
+}
+
+#Trace Plot for Gibbs Sampling
+pdf("gibbs_trace_plot.pdf", width = 6, height = 4)
+plot(theta1_samples[1, ], theta2_samples[1, ], pch = 16,
+     xlim = c(-4, 4), ylim = c(-4, 4),
+     xlab = expression(theta[1]), ylab = expression(theta[2]),
+     main = expression(theta[1] * " vs " *theta[2] * " for Iterations of Gibbs Sampling"), cex.lab = 1.5)
+for (j in 1:num_sequences) {
+  for (i in 1:(num_samples - 1)) {
+    segments(theta1_samples[i, j], theta2_samples[i, j],
+             theta1_samples[i+1, j], theta2_samples[i, j], lwd = 0.05)
+    segments(theta1_samples[i+1, j], theta2_samples[i, j],
+             theta1_samples[i+1, j], theta2_samples[i+1, j], lwd = 0.05)
+  }
+}
+dev.off()
+
+#Trace Plot for MH-within-Gibbs
+pdf("mh_gibbs_trace_plot.pdf", width = 6, height = 4)
+plot(theta1_uniform_samples[1, ], theta2_uniform_samples[1, ], pch = 16,
+     xlim = c(-4, 4), ylim = c(-4, 4),
+     xlab = expression(theta[1]), ylab = expression(theta[2]),
+     main = "Trace for Metropolis-within-Gibbs", cex.lab = 1.5)
+for (j in 1:num_sequences) {
+  for (i in 1:(num_samples - 1)) {
+    segments(theta1_uniform_samples[i, j], theta2_uniform_samples[i, j],
+             theta1_uniform_samples[i+1, j], theta2_uniform_samples[i, j], lwd = 0.3)
+    segments(theta1_uniform_samples[i+1, j], theta2_uniform_samples[i, j],
+             theta1_uniform_samples[i+1, j], theta2_uniform_samples[i+1, j], lwd = 0.3)
+  }
+}
+dev.off()
+
+#Comparison Plot
+pdf("gibbs_vs_mh_comparison.pdf", width = 6, height = 4)
+plot(NULL, xlim = c(-4, 4), ylim = c(-4, 4),
+     xlab = expression(theta[1]), ylab = expression(theta[2]),
+     main = "Comparison of Gibbs and MH-within-Gibbs Sampling", cex.lab = 1.5)
+for (j in 1:num_sequences) {
+  points(theta1_samples[round(num_samples/2):num_samples, j],
+         theta2_samples[round(num_samples/2):num_samples, j],
+         pch = 16, cex = 0.8, col = "black")
+  points(theta1_uniform_samples[round(num_samples/2):num_samples, j],
+         theta2_uniform_samples[round(num_samples/2):num_samples, j],
+         pch = 16, cex = 0.8, col = "red")
+}
+legend("topright", legend = c("Gibbs", "MH-within-Gibbs"), col = c("black", "red"), pch = 16)
+dev.off()
