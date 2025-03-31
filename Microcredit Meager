@@ -6,7 +6,7 @@ library(ggmcmc)
 
 #Clear workspace and set directory
 rm(list = ls())
-setwd("C:/Users/aoibh/OneDrive - University College Cork/Final Year Project/code")
+setwd("Final Year Project/code")
 
 #Load data
 source(file.path("R", "meager-microcredit-indep.R"))
