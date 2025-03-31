@@ -1,0 +1,77 @@
+library(tidyr)
+library(ggplot2)
+
+#The data
+y <- c(0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,2,2,2,2,2,2,2,2,2,1,5,2,5,
+       3,2,7,7,3,3,2,9,10,4,4,4,4,4,4,4,10,4,4,4,5,11,12,5,5,6,5,6,6,6,6,16,
+       15,15,9,4)
+n <- c(20,20,20,20,20,20,20,19,19,19,19,18,18,17,20,20,20,20,19,19,18,18,25,
+       24,23,20,20,20,20,20,20,10,49,19,46,27,17,49,47,20,20,13,48,50,20,20,
+       20,20,20,20,20,48,19,19,19,22,46,49,20,20,23,19,22,20,20,20,52,46,47,
+       24,14)
+d <- data.frame(y = y, n = n)
+
+#Log prior for alpha and beta
+log_prior1 <- function(a, b) {
+  -(5 / 2) * log(a + b)
+}
+
+#Transformation and inverse
+f <- function(a, b) {
+  list(u = log(a / b), v = log(a + b))
+}
+g <- function(u, v) {
+  a <- exp(u + v) / (1 + exp(u))
+  b <- exp(v) / (1 + exp(u))
+  list(a = a, b = b)
+}
+
+#Log prior for u,v (including Jacobian term)
+log_prior2 <- function(u, v) {
+  g_uv <- g(u, v)
+  a <- g_uv$a
+  b <- g_uv$b
+  log(a) + log(b) + log_prior1(a, b)
+}
+
+#Log likelihood
+log_like1 <- function(a, b, d) {
+  sum(lbeta(a + d$y, b + d$n - d$y) - lbeta(a, b))
+}
+
+#Log posterior
+log_like2 <- function(u, v, d) {
+  g_uv <- g(u, v)
+  log_like1(g_uv$a, g_uv$b, d)
+}
+
+log_post2 <- function(u, v, d) {
+  log_prior2(u, v) + log_like2(u, v, d)
+}
+
+#Create grid
+u_seq <- seq(-2.3, -1.3, length.out = 100)
+v_seq <- seq(1, 5, length.out = 100)
+out <- expand_grid(u = u_seq, v = v_seq, lp = NA_real_)
+
+#Compute log-posterior
+for (i in seq_len(nrow(out))) {
+  out$lp[i] <- log_post2(out$u[i], out$v[i], d)
+}
+
+#Plot
+fig1 <- ggplot(out, aes(x = u, y = v, z = exp(lp))) +
+  geom_contour(bins = 20) +
+  lims(x = c(-2.3, -1.3), y = c(1, 5)) +
+  labs(title = "Posterior Contour Plot", x = "u = log(α/β)", y = "v = log(α + β)")
+plot(fig1)
+
+
+
+
+
+
+
+
+
+
