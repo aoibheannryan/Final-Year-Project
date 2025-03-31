@@ -1,0 +1,214 @@
+#Load required libraries
+library(nimble)
+library(coda)
+library(mcmcse)
+library(ggmcmc)
+
+#Clear workspace and set directory
+rm(list = ls())
+setwd("C:/Users/aoibh/OneDrive - University College Cork/Final Year Project/code")
+
+#Load data
+source(file.path("R", "meager-microcredit-indep.R"))
+load(file.path("data", "microcredit", "microcredit-profit-independent.Rdata"))
+K <- length(unique(data$site))
+N <- length(data$treatment)
+g <- data$site
+t <- data$treatment
+y <- data$profit
+
+#MCMC settings
+niter <- 15000
+nburnin <- 4250  # Discard 4250 samples upfront
+nthin <- 5
+
+#Initial values
+set.seed(123)
+inits <- function() {
+  list(
+    mu = rnorm(1, 0, 1),
+    tau = rnorm(1, 0, 1),
+    sigma_mu = runif(1, 0.1, 2),
+    sigma_tau = runif(1, 0.1, 2),
+    mu_k = rnorm(K, 0, 1),
+    tau_k = rnorm(K, 0, 1),
+    sigma_k = runif(K, 0.1, 2)
+  )
+}
+
+data_list <- list(t = t, y = y)
+constants <- list(N = N, K = K, g = g)
+
+#Centered Model
+set.seed(123)
+nimble_code_centered <- nimbleCode({
+  for (i in 1:N) {
+    y[i] ~ dnorm(mu_k[g[i]] + tau_k[g[i]] * t[i], sd = sigma_k[g[i]])
+    y_pred[i] ~ dnorm(mu_k[g[i]] + tau_k[g[i]] * t[i], sd = sigma_k[g[i]])
+  }
+  for (k in 1:K) {
+    mu_k[k] ~ dnorm(mu, sd = sigma_mu)
+    tau_k[k] ~ dnorm(tau, sd = sigma_tau)
+    sigma_k[k] ~ dunif(0, 100000)
+  }
+  mu ~ dnorm(0, sd = 1000)
+  tau ~ dnorm(0, sd = 1000)
+  sigma_mu ~ dunif(0, 100000)
+  sigma_tau ~ dunif(0, 100000)
+})
+
+nimble_model_centered <- nimbleModel(nimble_code_centered, constants = constants, data = data_list, inits = inits())
+compiled_model_centered <- compileNimble(nimble_model_centered)
+mcmc_conf_centered <- configureMCMC(nimble_model_centered, monitors = c("sigma_k", "tau_k", "mu_k", "mu", "tau", "sigma_mu", "sigma_tau", "y_pred"))
+mcmc_samples_centered <- buildMCMC(mcmc_conf_centered)
+compiled_mcmc_centered <- compileNimble(mcmc_samples_centered, project = nimble_model_centered)
+
+#Non-Centered Model
+set.seed(123)
+nimble_code_noncentered <- nimbleCode({
+  for (i in 1:N) {
+    y[i] ~ dnorm(mu_k[g[i]] + tau_k[g[i]] * t[i], sd = sigma_k[g[i]])
+    y_pred[i] ~ dnorm(mu_k[g[i]] + tau_k[g[i]] * t[i], sd = sigma_k[g[i]])
+  }
+  for (k in 1:K) {
+    mu_k[k] <- mu + sigma_mu * mu_k_raw[k]
+    tau_k[k] <- tau + sigma_tau * tau_k_raw[k]
+    mu_k_raw[k] ~ dnorm(0, sd = 1)
+    tau_k_raw[k] ~ dnorm(0, sd = 1)
+    sigma_k[k] ~ dunif(0, 100000)
+  }
+  mu ~ dnorm(0, sd = 1000)
+  tau ~ dnorm(0, sd = 1000)
+  sigma_mu ~ dunif(0, 100000)
+  sigma_tau ~ dunif(0, 100000)
+})
+
+nimble_model_noncentered <- nimbleModel(nimble_code_noncentered, constants = constants, data = data_list, inits = inits())
+compiled_model_noncentered <- compileNimble(nimble_model_noncentered)
+mcmc_conf_noncentered <- configureMCMC(nimble_model_noncentered, monitors = c("sigma_k", "tau_k", "mu_k", "mu", "tau", "sigma_mu", "sigma_tau", "y_pred"))
+mcmc_samples_noncentered <- buildMCMC(mcmc_conf_noncentered)
+compiled_mcmc_noncentered <- compileNimble(mcmc_samples_noncentered, project = nimble_model_noncentered)
+
+#Run MCMC with 4250 burn-in
+final_samples_centered <- runMCMC(compiled_mcmc_centered, niter = niter, nburnin = nburnin, thin = nthin)
+final_samples_noncentered <- runMCMC(compiled_mcmc_noncentered, niter = niter, nburnin = nburnin, thin = nthin)
+final_coda_centered <- mcmc(final_samples_centered)
+final_coda_noncentered <- mcmc(final_samples_noncentered)
+
+#Save samples
+save(final_samples_centered, file = "FINAL_Chain_Centered.RData")
+save(final_samples_noncentered, file = "FINAL_Chain_NonCentered.RData")
+
+#ggmcmc Diagnostics
+S1 <- ggs(final_coda_centered[, c("mu", "tau", "sigma_mu", "sigma_tau", paste0("mu_k[", 1:K, "]"), paste0("tau_k[", 1:K, "]"), paste0("sigma_k[", 1:K, "]"))])
+S2 <- ggs(final_coda_noncentered[, c("mu", "tau", "sigma_mu", "sigma_tau", paste0("mu_k[", 1:K, "]"), paste0("tau_k[", 1:K, "]"), paste0("sigma_k[", 1:K, "]"))])
+
+#Full ggmcmc reports
+ggmcmc(S1, file = "FINAL_Chain1.pdf")
+ggmcmc(S2, file = "FINAL_Chain2.pdf")
+
+#Autocorrelation Plots
+pdf("autocorrelation_centered.pdf", width = 10, height = 8)
+ggs_autocorrelation(S1) + ggtitle("Autocorrelation (Centered)")
+dev.off()
+
+pdf("autocorrelation_noncentered.pdf", width = 10, height = 8)
+ggs_autocorrelation(S2) + ggtitle("Autocorrelation (Non-Centered)")
+dev.off()
+
+#Trace Plots
+pdf("traceplot_centered.pdf", width = 10, height = 8)
+ggs_traceplot(S1) + ggtitle("Trace Plots (Centered)") + facet_wrap(~Parameter, scales = "free_y")
+dev.off()
+
+pdf("traceplot_noncentered.pdf", width = 10, height = 8)
+ggs_traceplot(S2) + ggtitle("Trace Plots (Non-Centered)") + facet_wrap(~Parameter, scales = "free_y")
+dev.off()
+
+#ESS and MultiESS
+ess_centered <- effectiveSize(final_coda_centered[, c("mu", "tau", "sigma_mu", "sigma_tau", paste0("mu_k[", 1:K, "]"), paste0("tau_k[", 1:K, "]"), paste0("sigma_k[", 1:K, "]"))])
+write.csv(ess_centered, file = "ESS_Centered.csv")
+ess_noncentered <- effectiveSize(final_coda_noncentered[, c("mu", "tau", "sigma_mu", "sigma_tau", paste0("mu_k[", 1:K, "]"), paste0("tau_k[", 1:K, "]"), paste0("sigma_k[", 1:K, "]"))])
+write.csv(ess_noncentered, file = "ESS_NonCentered.csv")
+
+multiess_centered <- data.frame(
+  mu_k = multiESS(final_coda_centered[, paste0("mu_k[", 1:K, "]")]),
+  tau_k = multiESS(final_coda_centered[, paste0("tau_k[", 1:K, "]")]),
+  sigma_k = multiESS(final_coda_centered[, paste0("sigma_k[", 1:K, "]")])
+)
+write.csv(multiess_centered, file = "MultiESS_Centered.csv")
+multiess_noncentered <- data.frame(
+  mu_k = multiESS(final_coda_noncentered[, paste0("mu_k[", 1:K, "]")]),
+  tau_k = multiESS(final_coda_noncentered[, paste0("tau_k[", 1:K, "]")]),
+  sigma_k = multiESS(final_coda_noncentered[, paste0("sigma_k[", 1:K, "]")])
+)
+write.csv(multiess_noncentered, file = "MultiESS_NonCentered.csv")
+
+#Posterior Predictive Checks
+y_pred_cols <- grep("^y_pred\\[", colnames(final_samples_centered), value = TRUE)
+y_pred_mat_centered <- as.matrix(final_samples_centered[, y_pred_cols])
+y_pred_mat_noncentered <- as.matrix(final_samples_noncentered[, y_pred_cols])
+draws_to_plot <- 100
+sample_rows <- sample(1:nrow(y_pred_mat_centered), draws_to_plot)
+
+#Centered Posterior Predictive Histograms
+pdf("posterior_predictive_centered.pdf", width = 12, height = 8)
+par(mfrow = c(3, 3))
+for (k in 1:K) {
+  y_obs_k <- y[g == k]
+  idx_k <- which(g == k)
+  y_pred_k <- y_pred_mat_centered[sample_rows, idx_k]
+  y_pred_flat <- as.vector(y_pred_k)
+  all_vals <- c(y_obs_k, y_pred_flat)
+  breaks <- pretty(range(all_vals), n = 20)
+  h_obs <- hist(y_obs_k, breaks = breaks, plot = FALSE, probability = TRUE)
+  h_pred <- hist(y_pred_flat, breaks = breaks, plot = FALSE, probability = TRUE)
+  ylim_max <- max(h_obs$density, h_pred$density)
+  hist(y_obs_k, breaks = breaks, col = rgb(1, 0, 0, 0.8), border = "white", probability = TRUE,
+       main = paste("Site", k), xlab = "Profit", ylim = c(0, ylim_max), cex.lab = 1.3, cex.main = 1.2)
+  hist(y_pred_flat, breaks = breaks, col = rgb(0, 0, 1, 0.3), border = "white", probability = TRUE, add = TRUE)
+  legend("topright", legend = c("Observed", "Predicted"), fill = c(rgb(1, 0, 0, 0.5), rgb(0, 0, 1, 0.3)), border = NA, bty = "n", cex = 1.5)
+}
+dev.off()
+
+#Non-Centered Posterior Predictive Histograms
+pdf("posterior_predictive_noncentered.pdf", width = 12, height = 8)
+par(mfrow = c(3, 3))
+for (k in 1:K) {
+  y_obs_k <- y[g == k]
+  idx_k <- which(g == k)
+  y_pred_k <- y_pred_mat_noncentered[sample_rows, idx_k]
+  y_pred_flat <- as.vector(y_pred_k)
+  all_vals <- c(y_obs_k, y_pred_flat)
+  breaks <- pretty(range(all_vals), n = 20)
+  h_obs <- hist(y_obs_k, breaks = breaks, plot = FALSE, probability = TRUE)
+  h_pred <- hist(y_pred_flat, breaks = breaks, plot = FALSE, probability = TRUE)
+  ylim_max <- max(h_obs$density, h_pred$density)
+  hist(y_obs_k, breaks = breaks, col = rgb(1, 0, 0, 0.8), border = "white", probability = TRUE,
+       main = paste("Site", k), xlab = "Profit", ylim = c(0, ylim_max), cex.lab = 1.3, cex.main = 1.2)
+  hist(y_pred_flat, breaks = breaks, col = rgb(0, 0, 1, 0.3), border = "white", probability = TRUE, add = TRUE)
+  legend("topright", legend = c("Observed", "Predicted"), fill = c(rgb(1, 0, 0, 0.5), rgb(0, 0, 1, 0.3)), border = NA, bty = "n", cex = 1.5)
+}
+dev.off()
+
+#Shrinkage Plots
+data_means <- tapply(y, g, mean)
+mu_k_hat_centered <- apply(final_samples_centered[, grep("mu_k", colnames(final_samples_centered))], 2, mean)
+pdf("shrinkage_plot_centered.pdf", width = 6, height = 4)
+plot(rep(1, K), data_means, xlim = c(0.5, 2.5), ylim = range(c(data_means, mu_k_hat_centered)),
+     xaxt = "n", xlab = "", ylab = "Group Means", main = "Shrinkage Plot (Centered)",
+     pch = 19, col = "blue")
+points(rep(2, K), mu_k_hat_centered, pch = 19, col = "red")
+for (k in 1:K) lines(c(1, 2), c(data_means[k], mu_k_hat_centered[k]), col = "gray")
+axis(1, at = c(1, 2), labels = c("Data Means", "Posterior Mean"))
+dev.off()
+
+mu_k_hat_noncentered <- apply(final_samples_noncentered[, grep("mu_k", colnames(final_samples_noncentered))], 2, mean)
+pdf("shrinkage_plot_noncentered.pdf", width = 6, height = 4)
+plot(rep(1, K), data_means, xlim = c(0.5, 2.5), ylim = range(c(data_means, mu_k_hat_noncentered)),
+     xaxt = "n", xlab = "", ylab = "Group Means", main = "Shrinkage Plot (Non-Centered)",
+     pch = 19, col = "blue")
+points(rep(2, K), mu_k_hat_noncentered, pch = 19, col = "red")
+for (k in 1:K) lines(c(1, 2), c(data_means[k], mu_k_hat_noncentered[k]), col = "gray")
+axis(1, at = c(1, 2), labels = c("Data Means", "Posterior Mean"))
+dev.off()
